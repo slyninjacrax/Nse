@@ -3,6 +3,8 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import requests
+
 
 try:
     from curl_cffi import requests
