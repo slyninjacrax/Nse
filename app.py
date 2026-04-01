@@ -5,13 +5,6 @@ import streamlit as st
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import requests
 
-
-try:
-    from curl_cffi import requests
-except ImportError:
-    st.error("Missing curl_cffi. Run: pip install curl_cffi")
-    st.stop()
-
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
