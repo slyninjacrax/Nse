@@ -6,8 +6,9 @@ import streamlit as st
 
 try:
     from streamlit_autorefresh import st_autorefresh
+    AUTO_REFRESH_AVAILABLE = True
 except ImportError:
-    st_autorefresh = None
+    AUTO_REFRESH_AVAILABLE = False
 
 
 # -----------------------
@@ -107,6 +108,15 @@ def build_headers(cookie: str) -> dict:
         "Connection": "keep-alive",
         "Cookie": cookie,
     }
+
+
+def infer_symbol_from_url(url: str) -> str:
+    if "symbol=" in url:
+        try:
+            return url.split("symbol=", 1)[1].split("&", 1)[0]
+        except Exception:
+            return "OPTION"
+    return "OPTION"
 
 
 # -----------------------
@@ -254,8 +264,6 @@ clean_cols = ["Time", "PCR", "ATM IV", "Sentiment", "Underlying"]
 
 if "pcr_log" not in st.session_state:
     st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
-if "last_symbol" not in st.session_state:
-    st.session_state.last_symbol = "NIFTY"
 
 st.title("NSE Option Chain Dashboard")
 
@@ -291,25 +299,22 @@ with st.sidebar:
         placeholder="Paste only the cookie string here, or one line starting with Cookie:"
     )
 
-    target_symbol = st.text_input(
-        "Switch Symbol",
-        value="NIFTY"
-    ).upper()
-
-    if target_symbol != st.session_state.last_symbol:
-        st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
-        st.session_state.last_symbol = target_symbol
-        st.toast(f"Switched to {target_symbol}. Log cleared!")
-
     if st.button("Clear Log Manually"):
         st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
         st.rerun()
 
     refresh_rate = st.selectbox("Auto Refresh", ["Off", "1 min", "3 min", "5 min"], index=1)
 
-if refresh_rate != "Off" and st_autorefresh:
-    intervals = {"1 min": 60000, "3 min": 180000, "5 min": 300000}
-    st_autorefresh(interval=intervals[refresh_rate], key="datarefresh")
+if refresh_rate != "Off":
+    if AUTO_REFRESH_AVAILABLE:
+        intervals = {"1 min": 60000, "3 min": 180000, "5 min": 300000}
+        refresh_count = st_autorefresh(
+            interval=intervals[refresh_rate],
+            key="datarefresh"
+        )
+        st.sidebar.caption(f"Auto refresh active · count: {refresh_count}")
+    else:
+        st.sidebar.error("Auto refresh package not loaded.")
 
 cookie_value = extract_cookie(cookie_input)
 
@@ -318,10 +323,11 @@ if not base_url or not cookie_value:
     st.stop()
 
 headers_dict = build_headers(cookie_value)
+symbol_name = infer_symbol_from_url(base_url)
 
 try:
-    with st.spinner(f"Fetching live data for {target_symbol}..."):
-        r = requests.get(base_url, headers=headers_dict, timeout=15)
+    with st.spinner("Fetching live data..."):
+        r = requests.get(base_url, headers=headers_dict, timeout=30)
 
         if r.status_code != 200:
             st.error(f"NSE returned HTTP {r.status_code}. Cookie is likely stale.")
@@ -339,11 +345,7 @@ try:
         st.error("No option chain data found. Use a fresh cookie or matching request URL.")
         st.stop()
 
-    if expiries:
-        target_expiry = st.sidebar.selectbox("Select Expiry", expiries, index=0)
-    else:
-        all_exp = list(set([d.get("expiryDate") for d in data if d.get("expiryDate")]))
-        target_expiry = all_exp[0] if all_exp else "N/A"
+    target_expiry = st.sidebar.selectbox("Select Expiry", expiries, index=0) if expiries else "N/A"
 
     df_call, df_put, atm_strike, _ = build_tables(data, target_expiry, underlying, window_size=8)
 
@@ -359,11 +361,7 @@ try:
 
     atm_ce_iv = atm_call_row["IV"].values[0] if not atm_call_row.empty else 0
     atm_pe_iv = atm_put_row["IV"].values[0] if not atm_put_row.empty else 0
-
-    if atm_ce_iv > 0 and atm_pe_iv > 0:
-        atm_iv = (atm_ce_iv + atm_pe_iv) / 2
-    else:
-        atm_iv = max(atm_ce_iv, atm_pe_iv)
+    atm_iv = (atm_ce_iv + atm_pe_iv) / 2 if atm_ce_iv > 0 and atm_pe_iv > 0 else max(atm_ce_iv, atm_pe_iv)
 
     iv_tag = get_iv_status(sentiment, atm_iv)
 
@@ -377,11 +375,11 @@ try:
     left, right = st.columns(2)
 
     with left:
-        st.markdown(render_html_table(df_call, f"{target_symbol} CALL OPTION", "call", atm_strike), unsafe_allow_html=True)
+        st.markdown(render_html_table(df_call, f"{symbol_name} CALL OPTION", "call", atm_strike), unsafe_allow_html=True)
         st.markdown(f"**Total Call OI (Window):** {to_lakh(total_call_oi):.2f} Lakh")
 
     with right:
-        st.markdown(render_html_table(df_put, f"{target_symbol} PUT OPTION", "put", atm_strike), unsafe_allow_html=True)
+        st.markdown(render_html_table(df_put, f"{symbol_name} PUT OPTION", "put", atm_strike), unsafe_allow_html=True)
         st.markdown(f"**Total Put OI (Window):** {to_lakh(total_put_oi):.2f} Lakh")
 
     ist_time_str = get_ist_time().strftime("%H:%M:%S")
