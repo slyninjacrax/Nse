@@ -11,7 +11,7 @@ except ImportError:
 
 
 # -----------------------
-# Helpers & Calculations
+# Helpers
 # -----------------------
 def pcr_value(put_oi, call_oi):
     if not call_oi or call_oi == 0:
@@ -87,23 +87,13 @@ def get_day_greeting_and_symbol():
 def extract_cookie(raw_text: str) -> str:
     if not raw_text:
         return ""
-
     text = raw_text.strip()
-
-    # If user pasted a whole headers block by mistake, still try to extract Cookie line
-    for line in text.splitlines():
-        if line.lower().startswith("cookie:"):
-            return line.split(":", 1)[1].strip()
-
-    # If user pasted just "Cookie: ...."
     if text.lower().startswith("cookie:"):
         return text.split(":", 1)[1].strip()
-
-    # Otherwise treat whole box as cookie string
     return text
 
 
-def build_nse_headers(cookie: str) -> dict:
+def build_headers(cookie: str) -> dict:
     return {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -117,14 +107,6 @@ def build_nse_headers(cookie: str) -> dict:
         "Connection": "keep-alive",
         "Cookie": cookie,
     }
-
-
-def build_nse_url(symbol: str) -> str:
-    if symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
-        sec_type = "Indices"
-    else:
-        sec_type = "Equities"
-    return f"https://www.nseindia.com/api/option-chain-v3?type={sec_type}&symbol={symbol}"
 
 
 # -----------------------
@@ -264,7 +246,7 @@ def render_html_table(df, title, theme, atm_strike):
 
 
 # -----------------------
-# Streamlit UI App
+# Streamlit UI
 # -----------------------
 st.set_page_config(page_title="NSE Option Chain Dashboard", layout="wide")
 
@@ -296,25 +278,30 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.header("Cookie Mirror")
+    st.header("URL + Cookie")
 
-    target_symbol = st.text_input(
-        "🔄 Switch Symbol (e.g., NIFTY, BANKNIFTY, RELIANCE):",
-        value="NIFTY"
-    ).upper()
+    base_url = st.text_input(
+        "Request URL",
+        value="https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY"
+    )
 
     cookie_input = st.text_area(
-        "Paste Cookie only",
+        "Cookie only",
         height=220,
-        placeholder="Paste only the cookie string here.\nYou can also paste a single line starting with Cookie: ..."
+        placeholder="Paste only the cookie string here, or one line starting with Cookie:"
     )
+
+    target_symbol = st.text_input(
+        "Switch Symbol",
+        value="NIFTY"
+    ).upper()
 
     if target_symbol != st.session_state.last_symbol:
         st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
         st.session_state.last_symbol = target_symbol
         st.toast(f"Switched to {target_symbol}. Log cleared!")
 
-    if st.button("🧹 Clear Log Manually"):
+    if st.button("Clear Log Manually"):
         st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
         st.rerun()
 
@@ -326,31 +313,30 @@ if refresh_rate != "Off" and st_autorefresh:
 
 cookie_value = extract_cookie(cookie_input)
 
-if not cookie_value:
-    st.warning("👉 Paste only the NSE Cookie string to begin.")
+if not base_url or not cookie_value:
+    st.warning("Paste the Request URL and the Cookie to begin.")
     st.stop()
 
-final_fetch_url = build_nse_url(target_symbol)
-headers_dict = build_nse_headers(cookie_value)
+headers_dict = build_headers(cookie_value)
 
 try:
     with st.spinner(f"Fetching live data for {target_symbol}..."):
-        r = requests.get(final_fetch_url, headers=headers_dict, timeout=15)
+        r = requests.get(base_url, headers=headers_dict, timeout=15)
 
         if r.status_code != 200:
-            st.error(f"NSE returned HTTP {r.status_code}. Your cookie is likely stale.")
+            st.error(f"NSE returned HTTP {r.status_code}. Cookie is likely stale.")
             st.stop()
 
         try:
             raw_data = r.json()
         except Exception:
-            st.error("NSE did not return valid JSON. Paste a fresh cookie from the browser.")
+            st.error("NSE did not return valid JSON. Paste a fresh cookie.")
             st.stop()
 
     data, expiries, underlying = process_chain_data(raw_data)
 
     if not data:
-        st.error(f"No option chain data found for {target_symbol}. Paste a fresh cookie.")
+        st.error("No option chain data found. Use a fresh cookie or matching request URL.")
         st.stop()
 
     if expiries:
