@@ -1,14 +1,13 @@
-import json
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 import streamlit as st
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import requests
 
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
     st_autorefresh = None
+
 
 # -----------------------
 # Helpers & Calculations
@@ -17,6 +16,7 @@ def pcr_value(put_oi, call_oi):
     if not call_oi or call_oi == 0:
         return None
     return float(put_oi) / float(call_oi)
+
 
 def sentiment_from_pcr(p):
     if p is None:
@@ -30,7 +30,7 @@ def sentiment_from_pcr(p):
     else:
         return "MILD BULLISH"
 
-# --- CUSTOM IV LOGIC ---
+
 def get_iv_status(sentiment, iv):
     if not iv or iv == 0:
         return "N/A"
@@ -51,7 +51,7 @@ def get_iv_status(sentiment, iv):
         else:
             return "NORMAL"
 
-    else:  # SIDEWAYS
+    else:
         if iv > 20:
             return "HIGH"
         elif iv < 12:
@@ -59,29 +59,17 @@ def get_iv_status(sentiment, iv):
         else:
             return "NORMAL"
 
+
 def to_lakh(x):
     try:
         return float(x) / 100000.0
     except Exception:
         return 0.0
 
-def parse_headers(raw_text):
-    headers = {}
-    if not raw_text:
-        return headers
-    for line in raw_text.strip().splitlines():
-        if ":" in line:
-            key, val = line.split(":", 1)
-            key = key.strip()
-            if key.startswith(":"):
-                continue
-            if key.lower() == "accept-encoding":
-                continue
-            headers[key] = val.strip()
-    return headers
 
 def get_ist_time():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
 
 def get_day_greeting_and_symbol():
     hour = get_ist_time().hour
@@ -93,6 +81,41 @@ def get_day_greeting_and_symbol():
         return "Good evening", "🌆"
     else:
         return "Good night", "🌙"
+
+
+# -----------------------
+# NSE Fetch Logic
+# -----------------------
+def fetch_nse_option_chain(symbol: str):
+    session = requests.Session()
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 14; Mobile) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Mobile Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-IN,en;q=0.9",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Origin": "https://www.nseindia.com",
+        "Connection": "keep-alive",
+    }
+
+    if symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        sec_type = "Indices"
+    else:
+        sec_type = "Equities"
+
+    # Warm up session / cookies
+    session.get("https://www.nseindia.com/", headers=headers, timeout=15)
+    session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=15)
+
+    api_url = f"https://www.nseindia.com/api/option-chain-v3?type={sec_type}&symbol={symbol}"
+    response = session.get(api_url, headers=headers, timeout=15)
+    response.raise_for_status()
+    return response.json()
+
 
 # -----------------------
 # Data Processing
@@ -120,6 +143,7 @@ def process_chain_data(j):
 
     return data, expiries, underlying
 
+
 def build_tables(data, target_expiry, underlying, window_size=8):
     rows = [r for r in data if r.get("expiryDate") == target_expiry]
     if not rows:
@@ -132,7 +156,7 @@ def build_tables(data, target_expiry, underlying, window_size=8):
     if not strikes:
         return empty_df, empty_df, 0, []
 
-    atm_strike = min(strikes, key=lambda x: abs(x - underlying)) if underlying else strikes[len(strikes)//2]
+    atm_strike = min(strikes, key=lambda x: abs(x - underlying)) if underlying else strikes[len(strikes) // 2]
     atm_index = strikes.index(atm_strike)
     min_idx = max(0, atm_index - window_size)
     max_idx = min(len(strikes), atm_index + window_size + 1)
@@ -169,6 +193,7 @@ def build_tables(data, target_expiry, underlying, window_size=8):
 
     return dfc, dfp, atm_strike, target_strikes
 
+
 def render_html_table(df, title, theme, atm_strike):
     head_bg = "#1b5e20" if theme == "call" else "#b71c1c"
     rows_html = ""
@@ -177,7 +202,6 @@ def render_html_table(df, title, theme, atm_strike):
         sp = int(row["STRIKE"]) if pd.notna(row["STRIKE"]) else 0
         is_atm = (sp == atm_strike)
 
-        # Base row styling
         bg_color, font_weight = ("#ffff00", "bold") if is_atm else ("white", "normal")
         text_color = "black" if is_atm else ("#1b5e20" if theme == "call" else "#b71c1c")
 
@@ -186,20 +210,18 @@ def render_html_table(df, title, theme, atm_strike):
         chg_val = row["CHG_IN_OI"] if pd.notna(row["CHG_IN_OI"]) else 0
         odin_val = row["ODIN_%"] if pd.notna(row["ODIN_%"]) else 0
 
-        # 1. Builders vs Runners Logic (Change in OI)
         if chg_val < 0:
-            chg_bg = "#ffebee"   # Light Red Background (Runners)
-            chg_text = "#b71c1c" # Dark Red Text
+            chg_bg = "#ffebee"
+            chg_text = "#b71c1c"
         elif chg_val > 0:
-            chg_bg = "#e8f5e9"   # Light Green Background (Builders)
-            chg_text = "#1b5e20" # Dark Green Text
+            chg_bg = "#e8f5e9"
+            chg_text = "#1b5e20"
         else:
             chg_bg = "white"
             chg_text = "black"
 
-        # 2. Institutional Wall Logic (Odin %)
         if odin_val >= 10.0:
-            odin_bg = "#fff9c4"  # Light Yellow Background (Concrete Wall)
+            odin_bg = "#fff9c4"
             odin_weight = "bold"
         else:
             odin_bg = "white"
@@ -229,12 +251,12 @@ def render_html_table(df, title, theme, atm_strike):
     </div>
     """
 
+
 # -----------------------
 # Streamlit UI App
 # -----------------------
 st.set_page_config(page_title="NSE Option Chain Dashboard", layout="wide")
 
-# ULTRA-CLEAN DATAFRAME COLUMNS
 clean_cols = ["Time", "PCR", "ATM IV", "Sentiment", "Underlying"]
 
 if "pcr_log" not in st.session_state:
@@ -250,32 +272,25 @@ ist_display_time = get_ist_time().strftime("%H:%M:%S")
 st.markdown(
     f"""
     <div style="height: 22px;"></div>
-
     <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #333;">
         {symbol} {greeting}, Dr Chopra
     </div>
-
     <div style="height: 16px;"></div>
-
     <div style="font-size: 20px; font-weight: 500; color: #555;">
         IST Time: {ist_display_time}
     </div>
-
     <div style="height: 22px;"></div>
     """,
     unsafe_allow_html=True
 )
 
 with st.sidebar:
-    st.header("Direct Browser Mirror")
-    base_url = st.text_input(
-        "1. Paste exact Request URL:",
-        value="https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY"
-    )
-    raw_headers = st.text_area("2. Paste Request Headers block:", height=150)
+    st.header("Controls")
 
-    st.markdown("---")
-    target_symbol = st.text_input("🔄 Switch Symbol (e.g., BANKNIFTY, RELIANCE):", value="NIFTY").upper()
+    target_symbol = st.text_input(
+        "🔄 Switch Symbol (e.g., BANKNIFTY, RELIANCE):",
+        value="NIFTY"
+    ).upper()
 
     if target_symbol != st.session_state.last_symbol:
         st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
@@ -292,43 +307,14 @@ if refresh_rate != "Off" and st_autorefresh:
     intervals = {"1 min": 60000, "3 min": 180000, "5 min": 300000}
     st_autorefresh(interval=intervals[refresh_rate], key="datarefresh")
 
-if not raw_headers or not base_url:
-    st.warning("👈 Please paste the Request URL and Headers from your Network Tab to begin.")
-    st.stop()
-
-headers_dict = parse_headers(raw_headers)
-
-parsed_url = urlparse(base_url)
-query_params = parse_qs(parsed_url.query)
-
-if target_symbol:
-    query_params["symbol"] = [target_symbol]
-    if target_symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
-        query_params["type"] = ["Indices"]
-    else:
-        query_params["type"] = ["Equities"]
-
-new_query = urlencode(query_params, doseq=True)
-final_fetch_url = urlunparse(parsed_url._replace(query=new_query))
-
 try:
     with st.spinner(f"Fetching live data for {target_symbol}..."):
-        r = requests.get(final_fetch_url, headers=headers_dict, impersonate="chrome120", timeout=10)
-
-        if r.status_code != 200:
-            st.error(f"NSE returned HTTP {r.status_code}")
-            st.stop()
-
-        try:
-            raw_data = r.json()
-        except Exception:
-            st.error("NSE returned a blank page. Your IP might be burned, try using a mobile hotspot.")
-            st.stop()
+        raw_data = fetch_nse_option_chain(target_symbol)
 
     data, expiries, underlying = process_chain_data(raw_data)
 
     if not data:
-        st.error(f"No option chain data found for {target_symbol}. Check if the symbol is correct!")
+        st.error(f"No option chain data found for {target_symbol}.")
         st.stop()
 
     if expiries:
@@ -379,7 +365,6 @@ try:
     ist_time_str = get_ist_time().strftime("%H:%M:%S")
 
     if st.session_state.pcr_log.empty or st.session_state.pcr_log.iloc[-1]["Time"] != ist_time_str:
-        # Ultra-clean log row appending
         new_row = pd.DataFrame([{
             "Time": ist_time_str,
             "PCR": round(window_pcr, 2) if window_pcr else None,
@@ -411,5 +396,9 @@ try:
             chart_data = st.session_state.pcr_log[["Time", "PCR"]].copy().set_index("Time")
             st.line_chart(chart_data, height=300)
 
+except requests.exceptions.HTTPError as e:
+    st.error(f"NSE blocked or failed the request: {e}")
+except requests.exceptions.RequestException as e:
+    st.error(f"Network error: {e}")
 except Exception as e:
     st.error(f"Error fetching data: {e}")
