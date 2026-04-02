@@ -1,5 +1,4 @@
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import pandas as pd
 import requests
@@ -69,24 +68,6 @@ def to_lakh(x):
         return 0.0
 
 
-def parse_headers(raw_text):
-    headers = {}
-    if not raw_text:
-        return headers
-
-    for line in raw_text.strip().splitlines():
-        if ":" in line:
-            key, val = line.split(":", 1)
-            key = key.strip()
-            if key.startswith(":"):
-                continue
-            if key.lower() == "accept-encoding":
-                continue
-            headers[key] = val.strip()
-
-    return headers
-
-
 def get_ist_time():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
@@ -101,6 +82,49 @@ def get_day_greeting_and_symbol():
         return "Good evening", "🌆"
     else:
         return "Good night", "🌙"
+
+
+def extract_cookie(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+
+    text = raw_text.strip()
+
+    # If user pasted a whole headers block by mistake, still try to extract Cookie line
+    for line in text.splitlines():
+        if line.lower().startswith("cookie:"):
+            return line.split(":", 1)[1].strip()
+
+    # If user pasted just "Cookie: ...."
+    if text.lower().startswith("cookie:"):
+        return text.split(":", 1)[1].strip()
+
+    # Otherwise treat whole box as cookie string
+    return text
+
+
+def build_nse_headers(cookie: str) -> dict:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/133.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-IN,en;q=0.9,en-US;q=0.8",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Origin": "https://www.nseindia.com",
+        "Connection": "keep-alive",
+        "Cookie": cookie,
+    }
+
+
+def build_nse_url(symbol: str) -> str:
+    if symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        sec_type = "Indices"
+    else:
+        sec_type = "Equities"
+    return f"https://www.nseindia.com/api/option-chain-v3?type={sec_type}&symbol={symbol}"
 
 
 # -----------------------
@@ -253,14 +277,14 @@ if "last_symbol" not in st.session_state:
 
 st.title("NSE Option Chain Dashboard")
 
-greeting, symbol = get_day_greeting_and_symbol()
+greeting, symbol_emoji = get_day_greeting_and_symbol()
 ist_display_time = get_ist_time().strftime("%H:%M:%S")
 
 st.markdown(
     f"""
     <div style="height: 22px;"></div>
     <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #333;">
-        {symbol} {greeting}, Dr Chopra
+        {symbol_emoji} {greeting}, Dr Chopra
     </div>
     <div style="height: 16px;"></div>
     <div style="font-size: 20px; font-weight: 500; color: #555;">
@@ -272,25 +296,18 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.header("Direct Browser Mirror")
-
-    base_url = st.text_input(
-        "1. Paste exact Request URL:",
-        value="https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY"
-    )
-
-    raw_headers = st.text_area(
-        "2. Paste Request Headers block:",
-        height=220,
-        placeholder="Paste the full headers block here, including Cookie, User-Agent, Referer, Accept, etc."
-    )
-
-    st.markdown("---")
+    st.header("Cookie Mirror")
 
     target_symbol = st.text_input(
-        "🔄 Switch Symbol (e.g., BANKNIFTY, RELIANCE):",
+        "🔄 Switch Symbol (e.g., NIFTY, BANKNIFTY, RELIANCE):",
         value="NIFTY"
     ).upper()
+
+    cookie_input = st.text_area(
+        "Paste Cookie only",
+        height=220,
+        placeholder="Paste only the cookie string here.\nYou can also paste a single line starting with Cookie: ..."
+    )
 
     if target_symbol != st.session_state.last_symbol:
         st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
@@ -307,43 +324,33 @@ if refresh_rate != "Off" and st_autorefresh:
     intervals = {"1 min": 60000, "3 min": 180000, "5 min": 300000}
     st_autorefresh(interval=intervals[refresh_rate], key="datarefresh")
 
-if not raw_headers or not base_url:
-    st.warning("👉 Paste the exact NSE request URL and the full request headers block to begin.")
+cookie_value = extract_cookie(cookie_input)
+
+if not cookie_value:
+    st.warning("👉 Paste only the NSE Cookie string to begin.")
     st.stop()
 
-headers_dict = parse_headers(raw_headers)
-
-parsed_url = urlparse(base_url)
-query_params = parse_qs(parsed_url.query)
-
-if target_symbol:
-    query_params["symbol"] = [target_symbol]
-    if target_symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
-        query_params["type"] = ["Indices"]
-    else:
-        query_params["type"] = ["Equities"]
-
-new_query = urlencode(query_params, doseq=True)
-final_fetch_url = urlunparse(parsed_url._replace(query=new_query))
+final_fetch_url = build_nse_url(target_symbol)
+headers_dict = build_nse_headers(cookie_value)
 
 try:
     with st.spinner(f"Fetching live data for {target_symbol}..."):
         r = requests.get(final_fetch_url, headers=headers_dict, timeout=15)
 
         if r.status_code != 200:
-            st.error(f"NSE returned HTTP {r.status_code}")
+            st.error(f"NSE returned HTTP {r.status_code}. Your cookie is likely stale.")
             st.stop()
 
         try:
             raw_data = r.json()
         except Exception:
-            st.error("NSE did not return valid JSON. Refresh your browser request and paste a fresh headers block.")
+            st.error("NSE did not return valid JSON. Paste a fresh cookie from the browser.")
             st.stop()
 
     data, expiries, underlying = process_chain_data(raw_data)
 
     if not data:
-        st.error(f"No option chain data found for {target_symbol}. Your cookie/header block is likely stale.")
+        st.error(f"No option chain data found for {target_symbol}. Paste a fresh cookie.")
         st.stop()
 
     if expiries:
