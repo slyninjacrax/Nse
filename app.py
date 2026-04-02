@@ -1,7 +1,9 @@
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
 import pandas as pd
-import streamlit as st
 import requests
+import streamlit as st
 
 try:
     from streamlit_autorefresh import st_autorefresh
@@ -67,6 +69,24 @@ def to_lakh(x):
         return 0.0
 
 
+def parse_headers(raw_text):
+    headers = {}
+    if not raw_text:
+        return headers
+
+    for line in raw_text.strip().splitlines():
+        if ":" in line:
+            key, val = line.split(":", 1)
+            key = key.strip()
+            if key.startswith(":"):
+                continue
+            if key.lower() == "accept-encoding":
+                continue
+            headers[key] = val.strip()
+
+    return headers
+
+
 def get_ist_time():
     return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
 
@@ -81,40 +101,6 @@ def get_day_greeting_and_symbol():
         return "Good evening", "🌆"
     else:
         return "Good night", "🌙"
-
-
-# -----------------------
-# NSE Fetch Logic
-# -----------------------
-def fetch_nse_option_chain(symbol: str):
-    session = requests.Session()
-
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Linux; Android 14; Mobile) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Mobile Safari/537.36"
-        ),
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-IN,en;q=0.9",
-        "Referer": "https://www.nseindia.com/option-chain",
-        "Origin": "https://www.nseindia.com",
-        "Connection": "keep-alive",
-    }
-
-    if symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
-        sec_type = "Indices"
-    else:
-        sec_type = "Equities"
-
-    # Warm up session / cookies
-    session.get("https://www.nseindia.com/", headers=headers, timeout=15)
-    session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=15)
-
-    api_url = f"https://www.nseindia.com/api/option-chain-v3?type={sec_type}&symbol={symbol}"
-    response = session.get(api_url, headers=headers, timeout=15)
-    response.raise_for_status()
-    return response.json()
 
 
 # -----------------------
@@ -167,6 +153,7 @@ def build_tables(data, target_expiry, underlying, window_size=8):
         sp = row.get("strikePrice")
         if sp not in target_strikes:
             continue
+
         ce, pe = row.get("CE", {}), row.get("PE", {})
 
         call_data.append({
@@ -285,7 +272,20 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.header("Controls")
+    st.header("Direct Browser Mirror")
+
+    base_url = st.text_input(
+        "1. Paste exact Request URL:",
+        value="https://www.nseindia.com/api/option-chain-v3?type=Indices&symbol=NIFTY"
+    )
+
+    raw_headers = st.text_area(
+        "2. Paste Request Headers block:",
+        height=220,
+        placeholder="Paste the full headers block here, including Cookie, User-Agent, Referer, Accept, etc."
+    )
+
+    st.markdown("---")
 
     target_symbol = st.text_input(
         "🔄 Switch Symbol (e.g., BANKNIFTY, RELIANCE):",
@@ -307,14 +307,43 @@ if refresh_rate != "Off" and st_autorefresh:
     intervals = {"1 min": 60000, "3 min": 180000, "5 min": 300000}
     st_autorefresh(interval=intervals[refresh_rate], key="datarefresh")
 
+if not raw_headers or not base_url:
+    st.warning("👉 Paste the exact NSE request URL and the full request headers block to begin.")
+    st.stop()
+
+headers_dict = parse_headers(raw_headers)
+
+parsed_url = urlparse(base_url)
+query_params = parse_qs(parsed_url.query)
+
+if target_symbol:
+    query_params["symbol"] = [target_symbol]
+    if target_symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+        query_params["type"] = ["Indices"]
+    else:
+        query_params["type"] = ["Equities"]
+
+new_query = urlencode(query_params, doseq=True)
+final_fetch_url = urlunparse(parsed_url._replace(query=new_query))
+
 try:
     with st.spinner(f"Fetching live data for {target_symbol}..."):
-        raw_data = fetch_nse_option_chain(target_symbol)
+        r = requests.get(final_fetch_url, headers=headers_dict, timeout=15)
+
+        if r.status_code != 200:
+            st.error(f"NSE returned HTTP {r.status_code}")
+            st.stop()
+
+        try:
+            raw_data = r.json()
+        except Exception:
+            st.error("NSE did not return valid JSON. Refresh your browser request and paste a fresh headers block.")
+            st.stop()
 
     data, expiries, underlying = process_chain_data(raw_data)
 
     if not data:
-        st.error(f"No option chain data found for {target_symbol}.")
+        st.error(f"No option chain data found for {target_symbol}. Your cookie/header block is likely stale.")
         st.stop()
 
     if expiries:
@@ -396,9 +425,7 @@ try:
             chart_data = st.session_state.pcr_log[["Time", "PCR"]].copy().set_index("Time")
             st.line_chart(chart_data, height=300)
 
-except requests.exceptions.HTTPError as e:
-    st.error(f"NSE blocked or failed the request: {e}")
 except requests.exceptions.RequestException as e:
-    st.error(f"Network error: {e}")
+    st.error(f"Network/request error: {e}")
 except Exception as e:
     st.error(f"Error fetching data: {e}")
