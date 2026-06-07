@@ -273,7 +273,7 @@ ist_display_time = get_ist_time().strftime("%H:%M:%S")
 st.markdown(
     f"""
     <div style="height: 22px;"></div>
-    <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #A081A0;">
+    <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #684C68;">
         {symbol_emoji} {greeting}, Dr Priya Chopra
     </div>
     <div style="height: 16px;"></div>
