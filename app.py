@@ -164,17 +164,35 @@ def build_tables(data, target_expiry, underlying, window_size=8):
     if not strikes:
         return empty_df, empty_df, 0, []
 
-    # Accurate round-half-up ATM math
+    # --- NEW MARKET ROUNDING LOGIC ---
     if underlying:
-        diffs = [strikes[i+1] - strikes[i] for i in range(len(strikes)-1)]
-        step = max(set(diffs), key=diffs.count) if diffs else 50
-        atm_strike = math.floor((underlying / step) + 0.5) * step
-        if atm_strike not in strikes:
-            atm_strike = min(strikes, key=lambda x: abs(x - underlying))
+        # 1. Grab the two absolute closest strikes to the underlying price
+        closest_strikes = sorted(strikes, key=lambda x: abs(x - underlying))[:2]
+        
+        # 2. Simple loop to find which of these two strikes has the heavier Open Interest
+        best_strike = closest_strikes[0]
+        max_oi = -1
+        
+        for strike in closest_strikes:
+            strike_oi = sum(
+                r.get("CE", {}).get("openInterest", 0) + r.get("PE", {}).get("openInterest", 0)
+                for r in rows if r.get("strikePrice") == strike
+            )
+            
+            if strike_oi > max_oi:
+                max_oi = strike_oi
+                best_strike = strike
+                
+        atm_strike = best_strike
     else:
         atm_strike = strikes[len(strikes) // 2]
-        
-    atm_index = strikes.index(atm_strike)
+    # ---------------------------------
+
+    try:
+        atm_index = strikes.index(atm_strike)
+    except ValueError:
+        atm_index = 0
+
     min_idx = max(0, atm_index - window_size)
     max_idx = min(len(strikes), atm_index + window_size + 1)
     target_strikes = strikes[min_idx:max_idx]
