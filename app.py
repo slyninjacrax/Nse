@@ -298,25 +298,41 @@ clean_cols = ["Time", "PCR", "ATM IV", "Sentiment", "Underlying"]
 if "pcr_log" not in st.session_state:
     st.session_state.pcr_log = pd.DataFrame(columns=clean_cols)
 
-st.title("NSE Option Chain Dashboard")
-
 greeting, symbol_emoji = get_day_greeting_and_symbol()
 ist_display_time = get_ist_time().strftime("%H:%M:%S")
 
-st.markdown(
-    f"""
-    <div style="height: 22px;"></div>
-    <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #684C68;">
-        {symbol_emoji} {greeting}, Dr Priya Chopra
-    </div>
-    <div style="height: 16px;"></div>
-    <div style="font-size: 20px; font-weight: 500; color: #555;">
-        IST Time: {ist_display_time}
-    </div>
-    <div style="height: 22px;"></div>
-    """,
-    unsafe_allow_html=True
-)
+# Top Header Layout (Title on left, Video link on right)
+header_col, video_col = st.columns([3, 1])
+
+with header_col:
+    st.title("NSE Option Chain Dashboard")
+    st.markdown(
+        f"""
+        <div style="height: 10px;"></div>
+        <div style="font-size: 44px; font-weight: 700; line-height: 1.15; color: #684C68;">
+            {symbol_emoji} {greeting}, Dr Priya Chopra
+        </div>
+        <div style="height: 16px;"></div>
+        <div style="font-size: 20px; font-weight: 500; color: #555;">
+            IST Time: {ist_display_time}
+        </div>
+        <div style="height: 22px;"></div>
+        """,
+        unsafe_allow_html=True
+    )
+
+with video_col:
+    # Strikingly visible fallback card
+    st.markdown(
+        """
+        <div style="background-color: #fdf5f5; border: 2px solid #d32f2f; padding: 16px; border-radius: 8px; text-align: center; margin-top: 15px;">
+            <div style="font-size: 16px; font-weight: bold; color: #d32f2f; margin-bottom: 8px;">🎥 App Demo / Fallback</div>
+            <div style="font-size: 13px; color: #444; margin-bottom: 12px; line-height: 1.4;">If the app is asleep or failing to load live NSE data, watch how it functions here:</div>
+            <a href="https://www.youtube.com/watch?v=WPrOhgxnBNY" target="_blank" style="background-color: #d32f2f; color: white; padding: 8px 14px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block; font-size: 14px;">▶️ Watch on YouTube</a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 with st.sidebar:
     st.header("URL + Cookie")
@@ -337,11 +353,6 @@ with st.sidebar:
         st.rerun()
 
     refresh_rate = st.selectbox("Auto Refresh", ["Off", "1 min", "3 min", "5 min"], index=1)
-    
-    st.markdown("---")
-    st.markdown("### 🎥 App Demo / Fallback")
-    st.markdown("If this Streamlit app is asleep or failing to load live NSE data, watch how the dashboard functions here:")
-    st.markdown("[**▶️ Watch on YouTube**](https://www.youtube.com/watch?v=WPrOhgxnBNY)")
 
 if refresh_rate != "Off":
     if AUTO_REFRESH_AVAILABLE:
