@@ -164,7 +164,7 @@ def build_tables(data, target_expiry, underlying, window_size=8):
     if not strikes:
         return empty_df, empty_df, 0, []
 
-    # --- NEW MARKET ROUNDING LOGIC ---
+    # --- MARKET ROUNDING LOGIC ---
     if underlying:
         # 1. Grab the two absolute closest strikes to the underlying price
         closest_strikes = sorted(strikes, key=lambda x: abs(x - underlying))[:2]
@@ -337,6 +337,11 @@ with st.sidebar:
         st.rerun()
 
     refresh_rate = st.selectbox("Auto Refresh", ["Off", "1 min", "3 min", "5 min"], index=1)
+    
+    st.markdown("---")
+    st.markdown("### 🎥 App Demo / Fallback")
+    st.markdown("If this Streamlit app is asleep or failing to load live NSE data, watch how the dashboard functions here:")
+    st.markdown("[**▶️ Watch on YouTube**](https://www.youtube.com/watch?v=WPrOhgxnBNY)")
 
 if refresh_rate != "Off":
     if AUTO_REFRESH_AVAILABLE:
