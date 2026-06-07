@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
@@ -135,13 +136,19 @@ def process_chain_data(j):
     if not expiries:
         expiries = sorted(list(set([r.get("expiryDate") for r in data if r.get("expiryDate")])))
 
-    underlying = records.get("underlyingValue", 0)
+    # PRIORITY: Grab the freshest underlying value from the active strikes
+    underlying = 0
+    for r in data:
+        ce = r.get("CE", {})
+        pe = r.get("PE", {})
+        live_spot = ce.get("underlyingValue") or pe.get("underlyingValue")
+        if live_spot:
+            underlying = live_spot
+            break
+
+    # Fallback to top-level if we still have nothing
     if not underlying:
-        for r in data:
-            ce = r.get("CE", {})
-            if ce.get("underlyingValue"):
-                underlying = ce.get("underlyingValue")
-                break
+        underlying = records.get("underlyingValue", 0)
 
     return data, expiries, underlying
 
@@ -158,8 +165,27 @@ def build_tables(data, target_expiry, underlying, window_size=8):
     if not strikes:
         return empty_df, empty_df, 0, []
 
-    atm_strike = min(strikes, key=lambda x: abs(x - underlying)) if underlying else strikes[len(strikes) // 2]
-    atm_index = strikes.index(atm_strike)
+    # ATM LOGIC FIX: Mathematical round-half-up to match NSE
+    if underlying:
+        # Calculate dynamic strike interval (Mode handles missing strikes cleanly)
+        diffs = [strikes[i+1] - strikes[i] for i in range(len(strikes)-1)]
+        step = max(set(diffs), key=diffs.count) if diffs else 50
+        
+        atm_strike = math.floor((underlying / step) + 0.5) * step
+        
+        # Fallback if strike is mathematically sound but completely missing from chain
+        if atm_strike not in strikes:
+            atm_strike = min(strikes, key=lambda x: abs(x - underlying))
+    else:
+        atm_strike = strikes[len(strikes) // 2]
+
+    # Safe index finding
+    try:
+        atm_index = strikes.index(atm_strike)
+    except ValueError:
+        atm_strike = min(strikes, key=lambda x: abs(x - underlying))
+        atm_index = strikes.index(atm_strike)
+
     min_idx = max(0, atm_index - window_size)
     max_idx = min(len(strikes), atm_index + window_size + 1)
     target_strikes = strikes[min_idx:max_idx]
