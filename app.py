@@ -136,24 +136,23 @@ def process_chain_data(j):
     if not expiries:
         expiries = sorted(list(set([r.get("expiryDate") for r in data if r.get("expiryDate")])))
 
-    # FIX: Prioritize the root underlying value as it is meant to reflect the live index
-    underlying = records.get("underlyingValue", 0)
-
-    # If the root is 0, find the MOST FREQUENT spot price across all active strikes.
-    # This prevents the script from pulling a stale price from an untraded deep OTM option.
-    if not underlying:
-        spots = []
-        for r in data:
-            spot = r.get("CE", {}).get("underlyingValue") or r.get("PE", {}).get("underlyingValue")
-            if spot:
-                spots.append(spot)
-        if spots:
-            underlying = max(set(spots), key=spots.count)
+    # Fetch the freshest underlying value to bypass NSE's stale top-level cache
+    spots = []
+    for r in data:
+        ce_spot = r.get("CE", {}).get("underlyingValue")
+        pe_spot = r.get("PE", {}).get("underlyingValue")
+        if ce_spot: spots.append(ce_spot)
+        if pe_spot: spots.append(pe_spot)
+        
+    if spots:
+        underlying = max(set(spots), key=spots.count)
+    else:
+        underlying = records.get("underlyingValue", 0)
 
     return data, expiries, underlying
 
 
-def build_tables(data, target_expiry, underlying, window_size=8, atm_offset=0):
+def build_tables(data, target_expiry, underlying, window_size=8):
     rows = [r for r in data if r.get("expiryDate") == target_expiry]
     if not rows:
         rows = data
@@ -165,28 +164,17 @@ def build_tables(data, target_expiry, underlying, window_size=8, atm_offset=0):
     if not strikes:
         return empty_df, empty_df, 0, []
 
-    # ATM Calculation with standard round-half-up
+    # Accurate round-half-up ATM math
     if underlying:
         diffs = [strikes[i+1] - strikes[i] for i in range(len(strikes)-1)]
         step = max(set(diffs), key=diffs.count) if diffs else 50
-        
-        base_atm = math.floor((underlying / step) + 0.5) * step
-        
-        # Apply the manual offset from the sidebar (if any)
-        atm_strike = base_atm + (atm_offset * step)
-        
-        # Fallback if strike is missing from chain
+        atm_strike = math.floor((underlying / step) + 0.5) * step
         if atm_strike not in strikes:
             atm_strike = min(strikes, key=lambda x: abs(x - underlying))
     else:
         atm_strike = strikes[len(strikes) // 2]
-
-    try:
-        atm_index = strikes.index(atm_strike)
-    except ValueError:
-        atm_strike = min(strikes, key=lambda x: abs(x - underlying))
-        atm_index = strikes.index(atm_strike)
-
+        
+    atm_index = strikes.index(atm_strike)
     min_idx = max(0, atm_index - window_size)
     max_idx = min(len(strikes), atm_index + window_size + 1)
     target_strikes = strikes[min_idx:max_idx]
@@ -313,7 +301,7 @@ st.markdown(
 )
 
 with st.sidebar:
-    st.header("Settings & Cookies")
+    st.header("URL + Cookie")
 
     base_url = st.text_input(
         "Request URL",
@@ -322,16 +310,8 @@ with st.sidebar:
 
     cookie_input = st.text_area(
         "Cookie only",
-        height=180,
+        height=220,
         placeholder="Paste only the cookie string here, or one line starting with Cookie:"
-    )
-    
-    st.markdown("---")
-    st.markdown("**Troubleshooting**")
-    atm_offset = st.number_input(
-        "Force ATM Adjustment (Strikes)", 
-        min_value=-5, max_value=5, value=0, step=1,
-        help="If the NSE API spot price is lagging and selecting the wrong ATM, use this to force the ATM up (+1) or down (-1)."
     )
 
     if st.button("Clear Log Manually"):
@@ -382,7 +362,7 @@ try:
 
     target_expiry = st.sidebar.selectbox("Select Expiry", expiries, index=0) if expiries else "N/A"
 
-    df_call, df_put, atm_strike, _ = build_tables(data, target_expiry, underlying, window_size=8, atm_offset=atm_offset)
+    df_call, df_put, atm_strike, _ = build_tables(data, target_expiry, underlying, window_size=8)
 
     total_call_oi = df_call["OPEN_INT"].sum()
     total_put_oi = df_put["OPEN_INT"].sum()
@@ -401,13 +381,8 @@ try:
     iv_tag = get_iv_status(sentiment, atm_iv)
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    
-    # Check if user has overridden the ATM to indicate it in the UI
-    underlying_display = f"{underlying:.2f}" if underlying else "N/A"
-    atm_display = f"{atm_strike}" + (" (Forced)" if atm_offset != 0 else "")
-    
-    col1.metric("Underlying API Value", underlying_display)
-    col2.metric("Calculated ATM Strike", atm_display)
+    col1.metric("Underlying Value", f"{underlying:.2f}" if underlying else "N/A")
+    col2.metric("ATM Strike", f"{atm_strike}")
     col3.metric("Window PCR", f"{window_pcr:.2f}" if window_pcr else "N/A", sentiment)
     col4.metric("ATM Implied Volatility", f"{atm_iv:.1f}" if atm_iv else "N/A", iv_tag, delta_color="off")
     col5.metric("OI Difference", f"{diff_oi:,.0f}")
